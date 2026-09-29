@@ -1,68 +1,86 @@
-#include "statistics.hpp"
+#include "simulation.hpp"
 
-#include <fstream>
-#include <iomanip>
-#include <stdexcept>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <cstdint>
 
 namespace {
 
-template <typename Container, typename Selector>
-double average_trait(const Container& animals, Selector selector) {
-    if (animals.empty()) return 0.0;
-    double sum = 0.0;
-    for (const auto& animal : animals) {
-        if (animal.state.alive) sum += selector(animal.state.traits);
-    }
-    std::size_t alive = 0;
-    for (const auto& animal : animals) alive += animal.state.alive ? 1U : 0U;
-    return alive == 0 ? 0.0 : sum / static_cast<double>(alive);
+std::uint64_t parse_u64(const char* value) {
+    return static_cast<std::uint64_t>(std::stoull(value));
 }
 
-template <typename Container>
-std::size_t alive_count(const Container& animals) {
-    std::size_t count = 0;
-    for (const auto& animal : animals) count += animal.state.alive ? 1U : 0U;
-    return count;
+double parse_double(const char* value) {
+    return std::stod(value);
+}
+
+std::size_t parse_size(const char* value) {
+    return static_cast<std::size_t>(std::stoull(value));
+}
+
+void validate_config(const SimulationConfig& config) {
+    if (config.world_size <= 0.0) {
+        throw std::invalid_argument("world_size must be greater than 0");
+    }
+    if (config.water_sources == 0) {
+        throw std::invalid_argument("water_sources must be greater than 0");
+    }
+    if (config.food_sources == 0) {
+        throw std::invalid_argument("food_sources must be greater than 0");
+    }
+    if (config.initial_herbivores > 0 && config.herbivore_soft_capacity == 0) {
+        throw std::invalid_argument("herbivore_soft_capacity must be greater than 0");
+    }
+    if (config.initial_predators > 0 && config.predator_soft_capacity == 0) {
+        throw std::invalid_argument("predator_soft_capacity must be greater than 0");
+    }
+    if (config.ticks == 0) {
+        throw std::invalid_argument("ticks must be greater than 0");
+    }
+}
+
+std::string build_csv_path(std::uint32_t seed) {
+    const std::filesystem::path output_dir = "output/data";
+    std::filesystem::create_directories(output_dir);
+    return (output_dir / ("evolution_stats_" + std::to_string(seed) + ".csv")).string();
+}
+
+void print_usage(const char* exe) {
+    std::cout << "Us: " << exe << " [mida_mon] [aigua] [menjar] [herbivors] [depredadors] [ticks] [seed]\n";
+    std::cout << "Exemple: " << exe << " 100 12 25 80 12 5000 42\n";
 }
 
 } // namespace
 
-void StatisticsCollector::sample(std::size_t tick, const std::vector<Herbivore>& herbivores,
-                                 const std::vector<Predator>& predators) {
-    TickStats s;
-    s.tick = tick;
-    s.herbivores = alive_count(herbivores);
-    s.predators = alive_count(predators);
+int main(int argc, char** argv) {
+    try {
+        if (argc > 8) {
+            print_usage(argv[0]);
+            return 2;
+        }
 
-    s.herbivore_avg_attractiveness = average_trait(herbivores, [](const Traits& t) { return t.attractiveness; });
-    s.herbivore_avg_vision = average_trait(herbivores, [](const Traits& t) { return t.vision; });
-    s.herbivore_avg_speed = average_trait(herbivores, [](const Traits& t) { return t.speed; });
-    s.herbivore_avg_size = average_trait(herbivores, [](const Traits& t) { return t.size; });
-    s.herbivore_avg_metabolism = average_trait(herbivores, [](const Traits& t) { return t.metabolism; });
+        SimulationConfig config;
+        if (argc >= 2) config.world_size = parse_double(argv[1]);
+        if (argc >= 3) config.water_sources = parse_size(argv[2]);
+        if (argc >= 4) config.food_sources = parse_size(argv[3]);
+        if (argc >= 5) config.initial_herbivores = parse_size(argv[4]);
+        if (argc >= 6) config.initial_predators = parse_size(argv[5]);
+        if (argc >= 7) config.ticks = parse_u64(argv[6]);
+        if (argc >= 8) config.seed = static_cast<std::uint32_t>(parse_u64(argv[7]));
 
-    s.predator_avg_attractiveness = average_trait(predators, [](const Traits& t) { return t.attractiveness; });
-    s.predator_avg_vision = average_trait(predators, [](const Traits& t) { return t.vision; });
-    s.predator_avg_speed = average_trait(predators, [](const Traits& t) { return t.speed; });
-    s.predator_avg_size = average_trait(predators, [](const Traits& t) { return t.size; });
-    s.predator_avg_metabolism = average_trait(predators, [](const Traits& t) { return t.metabolism; });
+        validate_config(config);
 
-    samples_.push_back(s);
-}
+        Simulation simulation(config);
+        simulation.run();
 
-void StatisticsCollector::write_csv(const std::string& filename) const {
-    std::ofstream out(filename);
-    if (!out) throw std::runtime_error("No s'ha pogut obrir el CSV: " + filename);
-
-    out << "Tick,Herbivores,Predators,"
-           "HerbivoreAvgAttractiveness,HerbivoreAvgVision,HerbivoreAvgSpeed,HerbivoreAvgSize,HerbivoreAvgMetabolism,"
-           "PredatorAvgAttractiveness,PredatorAvgVision,PredatorAvgSpeed,PredatorAvgSize,PredatorAvgMetabolism\n";
-
-    out << std::setprecision(6);
-    for (const auto& s : samples_) {
-        out << s.tick << ',' << s.herbivores << ',' << s.predators << ','
-            << s.herbivore_avg_attractiveness << ',' << s.herbivore_avg_vision << ','
-            << s.herbivore_avg_speed << ',' << s.herbivore_avg_size << ',' << s.herbivore_avg_metabolism << ','
-            << s.predator_avg_attractiveness << ',' << s.predator_avg_vision << ','
-            << s.predator_avg_speed << ',' << s.predator_avg_size << ',' << s.predator_avg_metabolism << '\n';
+        const std::string filename = build_csv_path(config.seed);
+        simulation.write_csv(filename);
+        std::cout << "\nSimulacio finalitzada. Dades: " << filename << "\n";
+        return EXIT_SUCCESS;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << '\n';
+        return EXIT_FAILURE;
     }
 }
